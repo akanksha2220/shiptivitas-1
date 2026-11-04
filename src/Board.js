@@ -7,24 +7,72 @@ import './Board.css';
 export default class Board extends React.Component {
   constructor(props) {
     super(props);
-    const clients = this.getClients().map(client => ({
-  ...client,
-  status: 'backlog'
-}));
+
     this.state = {
       clients: {
-        backlog: clients.filter(client => !client.status || client.status === 'backlog'),
-        inProgress: clients.filter(client => client.status && client.status === 'in-progress'),
-        complete: clients.filter(client => client.status && client.status === 'complete'),
-      }
-    }
+        backlog: [],
+        inProgress: [],
+        complete: []
+      },
+      loading: true,
+      saving: false,
+      error: ''
+    };
+
     this.swimlanes = {
       backlog: React.createRef(),
       inProgress: React.createRef(),
-      complete: React.createRef(),
+      complete: React.createRef()
+    };
+
+    this.busy = true;
+    this.unmounted = false;
+  }
+
+  groupClients(clients) {
+    const sorted = [...clients].sort(
+      (a, b) => a.priority - b.priority || a.id - b.id
+    );
+
+    return {
+      backlog: sorted.filter(card => card.status === 'backlog'),
+      inProgress: sorted.filter(card => card.status === 'in-progress'),
+      complete: sorted.filter(card => card.status === 'complete')
+    };
+  }
+
+  async loadClients() {
+    this.busy = true;
+    this.setState({ loading: true, error: '' });
+
+    try {
+      const response = await fetch('/api/v1/clients');
+
+      if (!response.ok) {
+        throw new Error('Could not load cards. Check the backend server.');
+      }
+
+      const clients = await response.json();
+
+      if (!this.unmounted) {
+        this.setState({
+          clients: this.groupClients(clients),
+          loading: false
+        });
+      }
+    } catch (error) {
+      if (!this.unmounted) {
+        this.setState({
+          error: error.message,
+          loading: false
+        });
+      }
+    } finally {
+      this.busy = false;
     }
   }
-    componentDidMount() {
+
+  componentDidMount() {
     const laneKeys = ['backlog', 'inProgress', 'complete'];
 
     const statuses = {
@@ -33,106 +81,92 @@ export default class Board extends React.Component {
       complete: 'complete'
     };
 
-    const containers = laneKeys.map(
-      key => this.swimlanes[key].current
+    this.drake = Dragula(
+      laneKeys.map(key => this.swimlanes[key].current),
+      {
+        revertOnSpill: true,
+        moves: () => !this.busy && !this.state.error
+      }
     );
-
-    this.drake = Dragula(containers, {
-      revertOnSpill: true
-    });
 
     this.drake.on('drag', element => {
       this.originalNextSibling = element.nextSibling;
     });
 
-    this.drake.on('drop', (element, target, source, sibling) => {
+    this.drake.on('drop', (element, target, source) => {
       if (!target) return;
 
-      const cardId = element.getAttribute('data-id');
-      const nextId = sibling
-        ? sibling.getAttribute('data-id')
-        : null;
-
-      const destination = laneKeys.find(
+      const id = element.getAttribute('data-id');
+      const lane = laneKeys.find(
         key => this.swimlanes[key].current === target
       );
 
-      // Restore the DOM before React renders the updated state.
+      // Read the dropped position before restoring React's DOM.
+      const priority = Array.from(target.children)
+        .indexOf(element) + 1;
+
       source.insertBefore(element, this.originalNextSibling);
 
-      this.setState(previousState => {
-        const clients = {};
-        let movedCard;
-
-        laneKeys.forEach(key => {
-          clients[key] = previousState.clients[key].filter(card => {
-            if (card.id === cardId) {
-              movedCard = card;
-              return false;
-            }
-            return true;
-          });
-        });
-
-        if (!movedCard) return null;
-
-        const updatedCard = {
-          ...movedCard,
-          status: statuses[destination]
-        };
-
-        const nextIndex = clients[destination].findIndex(
-          card => card.id === nextId
-        );
-
-        const insertIndex = nextIndex === -1
-          ? clients[destination].length
-          : nextIndex;
-
-        clients[destination].splice(insertIndex, 0, updatedCard);
-
-        return { clients };
-      });
+      this.saveMovement(id, statuses[lane], priority);
     });
+
+    this.loadClients();
+  }
+
+  async saveMovement(id, status, priority) {
+    this.busy = true;
+    this.setState({ saving: true, error: '' });
+
+    try {
+      const response = await fetch(`/api/v1/clients/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ status, priority })
+      });
+
+      if (!response.ok) {
+        throw new Error('Could not save the card movement.');
+      }
+
+      const clients = await response.json();
+
+      if (!this.unmounted) {
+        this.setState({
+          clients: this.groupClients(clients),
+          saving: false
+        });
+      }
+    } catch (error) {
+      if (!this.unmounted) {
+        this.setState({
+          saving: false,
+          error: `${error.message} Reload cards before trying again.`
+        });
+      }
+    } finally {
+      this.busy = false;
+    }
   }
 
   componentWillUnmount() {
+    this.unmounted = true;
+
     if (this.drake) {
       this.drake.destroy();
     }
   }
-  getClients() {
-    return [
-      ['1','Stark, White and Abbott','Cloned Optimal Architecture', 'in-progress'],
-      ['2','Wiza LLC','Exclusive Bandwidth-Monitored Implementation', 'complete'],
-      ['3','Nolan LLC','Vision-Oriented 4Thgeneration Graphicaluserinterface', 'backlog'],
-      ['4','Thompson PLC','Streamlined Regional Knowledgeuser', 'in-progress'],
-      ['5','Walker-Williamson','Team-Oriented 6Thgeneration Matrix', 'in-progress'],
-      ['6','Boehm and Sons','Automated Systematic Paradigm', 'backlog'],
-      ['7','Runolfsson, Hegmann and Block','Integrated Transitional Strategy', 'backlog'],
-      ['8','Schumm-Labadie','Operative Heuristic Challenge', 'backlog'],
-      ['9','Kohler Group','Re-Contextualized Multi-Tasking Attitude', 'backlog'],
-      ['10','Romaguera Inc','Managed Foreground Toolset', 'backlog'],
-      ['11','Reilly-King','Future-Proofed Interactive Toolset', 'complete'],
-      ['12','Emard, Champlin and Runolfsdottir','Devolved Needs-Based Capability', 'backlog'],
-      ['13','Fritsch, Cronin and Wolff','Open-Source 3Rdgeneration Website', 'complete'],
-      ['14','Borer LLC','Profit-Focused Incremental Orchestration', 'backlog'],
-      ['15','Emmerich-Ankunding','User-Centric Stable Extranet', 'in-progress'],
-      ['16','Willms-Abbott','Progressive Bandwidth-Monitored Access', 'in-progress'],
-      ['17','Brekke PLC','Intuitive User-Facing Customerloyalty', 'complete'],
-      ['18','Bins, Toy and Klocko','Integrated Assymetric Software', 'backlog'],
-      ['19','Hodkiewicz-Hayes','Programmable Systematic Securedline', 'backlog'],
-      ['20','Murphy, Lang and Ferry','Organized Explicit Access', 'backlog'],
-    ].map(companyDetails => ({
-      id: companyDetails[0],
-      name: companyDetails[1],
-      description: companyDetails[2],
-      status: companyDetails[3],
-    }));
-  }
-  renderSwimlane(name, clients, ref) {
+
+  renderSwimlane(name, key) {
     return (
-      <Swimlane name={name} clients={clients} dragulaRef={ref}/>
+      <div className="col-md-4">
+        <Swimlane
+          name={name}
+          clients={this.state.clients[key]}
+          dragulaRef={this.swimlanes[key]}
+        />
+      </div>
     );
   }
 
@@ -140,16 +174,27 @@ export default class Board extends React.Component {
     return (
       <div className="Board">
         <div className="container-fluid">
+          {this.state.loading && <p>Loading cards...</p>}
+          {this.state.saving && <p>Saving movement...</p>}
+
+          {this.state.error && (
+            <div className="alert alert-danger" role="alert">
+              {this.state.error}
+              {' '}
+              <button
+                type="button"
+                onClick={() => this.loadClients()}
+                disabled={this.state.loading || this.state.saving}
+              >
+                Reload cards
+              </button>
+            </div>
+          )}
+
           <div className="row">
-            <div className="col-md-4">
-              {this.renderSwimlane('Backlog', this.state.clients.backlog, this.swimlanes.backlog)}
-            </div>
-            <div className="col-md-4">
-              {this.renderSwimlane('In Progress', this.state.clients.inProgress, this.swimlanes.inProgress)}
-            </div>
-            <div className="col-md-4">
-              {this.renderSwimlane('Complete', this.state.clients.complete, this.swimlanes.complete)}
-            </div>
+            {this.renderSwimlane('Backlog', 'backlog')}
+            {this.renderSwimlane('In Progress', 'inProgress')}
+            {this.renderSwimlane('Complete', 'complete')}
           </div>
         </div>
       </div>
