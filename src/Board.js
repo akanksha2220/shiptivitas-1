@@ -7,7 +7,10 @@ import './Board.css';
 export default class Board extends React.Component {
   constructor(props) {
     super(props);
-    const clients = this.getClients();
+    const clients = this.getClients().map(client => ({
+  ...client,
+  status: 'backlog'
+}));
     this.state = {
       clients: {
         backlog: clients.filter(client => !client.status || client.status === 'backlog'),
@@ -19,6 +22,83 @@ export default class Board extends React.Component {
       backlog: React.createRef(),
       inProgress: React.createRef(),
       complete: React.createRef(),
+    }
+  }
+    componentDidMount() {
+    const laneKeys = ['backlog', 'inProgress', 'complete'];
+
+    const statuses = {
+      backlog: 'backlog',
+      inProgress: 'in-progress',
+      complete: 'complete'
+    };
+
+    const containers = laneKeys.map(
+      key => this.swimlanes[key].current
+    );
+
+    this.drake = Dragula(containers, {
+      revertOnSpill: true
+    });
+
+    this.drake.on('drag', element => {
+      this.originalNextSibling = element.nextSibling;
+    });
+
+    this.drake.on('drop', (element, target, source, sibling) => {
+      if (!target) return;
+
+      const cardId = element.getAttribute('data-id');
+      const nextId = sibling
+        ? sibling.getAttribute('data-id')
+        : null;
+
+      const destination = laneKeys.find(
+        key => this.swimlanes[key].current === target
+      );
+
+      // Restore the DOM before React renders the updated state.
+      source.insertBefore(element, this.originalNextSibling);
+
+      this.setState(previousState => {
+        const clients = {};
+        let movedCard;
+
+        laneKeys.forEach(key => {
+          clients[key] = previousState.clients[key].filter(card => {
+            if (card.id === cardId) {
+              movedCard = card;
+              return false;
+            }
+            return true;
+          });
+        });
+
+        if (!movedCard) return null;
+
+        const updatedCard = {
+          ...movedCard,
+          status: statuses[destination]
+        };
+
+        const nextIndex = clients[destination].findIndex(
+          card => card.id === nextId
+        );
+
+        const insertIndex = nextIndex === -1
+          ? clients[destination].length
+          : nextIndex;
+
+        clients[destination].splice(insertIndex, 0, updatedCard);
+
+        return { clients };
+      });
+    });
+  }
+
+  componentWillUnmount() {
+    if (this.drake) {
+      this.drake.destroy();
     }
   }
   getClients() {
